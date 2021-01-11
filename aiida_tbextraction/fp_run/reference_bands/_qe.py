@@ -28,7 +28,7 @@ class QuantumEspressoReferenceBands(ReferenceBandsBase):
         super().define(spec)
 
         # top-level inputs as defined by the base class
-        spec.expose_inputs(PwBaseWorkChain, include=['structure', 'kpoints'])
+        spec.expose_inputs(PwBaseWorkChain, include=['kpoints'])
         # The 'calcjob' validator is mistakenly assigned upon exposing,
         # see aiida-core issue #3449.
         spec.inputs.validator = None
@@ -36,7 +36,9 @@ class QuantumEspressoReferenceBands(ReferenceBandsBase):
         # cannot put everything at the top-level because 'metadata'
         # would then be interpreted at the workchain level
         spec.expose_inputs(
-            PwBaseWorkChain, exclude=['structure', 'kpoints'], namespace='bands'
+            PwBaseWorkChain,
+            exclude=['pw.structure', 'kpoints'],
+            namespace='bands'
         )
 
         spec.outline(cls.run_calc, cls.get_bands)
@@ -55,6 +57,7 @@ class QuantumEspressoReferenceBands(ReferenceBandsBase):
                 'calculation': 'bands'
             }}), pw_inputs['pw'].get('parameters', orm.Dict())
         )
+        pw_inputs['pw']['structure'] = self.inputs.structure
 
         return ToContext(pw_calc=self.submit(PwBaseWorkChain, **pw_inputs))
 

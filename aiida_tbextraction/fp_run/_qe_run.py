@@ -37,7 +37,9 @@ class QuantumEspressoFirstPrinciplesRun(FirstPrinciplesRunBase):
         super().define(spec)
 
         spec.expose_inputs(
-            PwBaseWorkChain, namespace='scf', exclude=['structure', 'kpoints']
+            PwBaseWorkChain,
+            namespace='scf',
+            exclude=['pw.structure', 'kpoints']
         )
         spec.expose_inputs(
             QuantumEspressoReferenceBands, include=['structure', 'kpoints']
@@ -88,11 +90,10 @@ class QuantumEspressoFirstPrinciplesRun(FirstPrinciplesRunBase):
                 'calculation': 'scf'
             }}), inputs['pw'].get('parameters', orm.Dict())
         )
+        inputs['pw']['structure'] = self.inputs.structure
         return ToContext(
             scf=self.submit(
-                PwBaseWorkChain,
-                kpoints=self.inputs.kpoints_mesh,
-                **inputs
+                PwBaseWorkChain, kpoints=self.inputs.kpoints_mesh, **inputs
             )
         )
 
@@ -106,7 +107,7 @@ class QuantumEspressoFirstPrinciplesRun(FirstPrinciplesRunBase):
             QuantumEspressoReferenceBands, namespace='bands'
         )
         bands_inputs['bands']['pw']['parent_folder'
-                           ] = self.ctx.scf.outputs.remote_folder
+                                    ] = self.ctx.scf.outputs.remote_folder
         bands_run = self.submit(QuantumEspressoReferenceBands, **bands_inputs)
 
         self.report('Launching to_wannier workchain.')
@@ -114,7 +115,7 @@ class QuantumEspressoFirstPrinciplesRun(FirstPrinciplesRunBase):
             QuantumEspressoWannierInput, namespace='to_wannier'
         )
         wannier_inputs['nscf']['pw']['parent_folder'
-                               ] = self.ctx.scf.outputs.remote_folder
+                                     ] = self.ctx.scf.outputs.remote_folder
 
         if 'wannier_parameters' in self.inputs:
             wannier_inputs['wannier_parameters'

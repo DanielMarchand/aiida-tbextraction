@@ -17,9 +17,6 @@ import numpy as np
 from ase.io.vasp import read_vasp
 from aiida import orm
 
-from aiida_vasp.data.potcar import PotcarData
-
-from aiida_tbextraction.fp_run import QuantumEspressoFirstPrinciplesRun
 from aiida_tbextraction.model_evaluation import BandDifferenceModelEvaluation
 
 pytest_plugins = [  # pylint: disable=invalid-name
@@ -28,27 +25,43 @@ pytest_plugins = [  # pylint: disable=invalid-name
 ]
 
 
-def pytest_addoption(parser):
+@pytest.fixture(scope='session', autouse=True)
+def set_localhost_interval(configure):
+    orm.Computer.get(label='localhost').set_minimum_job_poll_interval(0.)
+
+
+def pytest_addoption(parser):  # pylint: disable=missing-function-docstring
     parser.addoption(
         '--skip-qe',
         action='store_true',
         help='Skip tests which require Quantum ESPRESSO.'
+    )
+    parser.addoption(
+        '--skip-vasp',
+        action='store_true',
+        help='Skip tests which require VASP.'
     )
 
 
 def pytest_configure(config):
     # register additional marker
     config.addinivalue_line("markers", "qe: mark tests which run with QE")
+    config.addinivalue_line("markers", "vasp: mark tests which run with VASP")
 
 
 def pytest_runtest_setup(item):  # pylint: disable=missing-function-docstring
     try:
         qe_marker = item.get_marker("qe")
+        vasp_marker = item.get_marker("vasp")
     except AttributeError:
         qe_marker = item.get_closest_marker('qe')
+        vasp_marker = item.get_closest_marker('vasp')
     if qe_marker is not None:
         if item.config.getoption("--skip-qe"):
-            pytest.skip("Test runs only with QE.")
+            pytest.skip("Test needs Quantum ESPRESSO.")
+    if vasp_marker is not None:
+        if item.config.getoption("--skip-vasp"):
+            pytest.skip("Test needs VASP.")
 
 
 @pytest.fixture(scope='session')
@@ -176,11 +189,14 @@ def get_repeated_pw_input(
     the top-level workchain.
     """
     def _get_repeated_pw_input():
+        options = get_metadata_singlecore()
         return {
-            'pseudos': insb_pseudos_qe,
-            'parameters': insb_common_qe_parameters,
-            'metadata': get_metadata_singlecore(),
-            'code': code_pw
+            'pw': {
+                'pseudos': insb_pseudos_qe,
+                'parameters': insb_common_qe_parameters,
+                'metadata': options,
+                'code': code_pw
+            }
         }
 
     return _get_repeated_pw_input
@@ -224,6 +240,10 @@ def get_top_level_insb_inputs(configure, insb_structure):
     return inner
 
 
+# use very large batchsize to force one batch
+_DEFAULT_PW2WANNIER_BANDS_BATCHSIZE = 10000
+
+
 @pytest.fixture
 def get_qe_specific_fp_run_inputs(
     configure, code_pw, code_wannier90, code_pw2wannier90,
@@ -234,11 +254,11 @@ def get_qe_specific_fp_run_inputs(
     higher-level workflows (fp_tb, optimize_*), these are passed
     in the 'fp_run' namespace.
     """
-    def inner():
+    def inner(pw2wannier_bands_batchsize=_DEFAULT_PW2WANNIER_BANDS_BATCHSIZE):
         return {
             'scf': get_repeated_pw_input(),
             'bands': {
-                'pw': get_repeated_pw_input()
+                'bands': get_repeated_pw_input()
             },
             'to_wannier': {
                 'nscf': get_repeated_pw_input(),
@@ -247,8 +267,11 @@ def get_qe_specific_fp_run_inputs(
                     'metadata': get_metadata_singlecore()
                 },
                 'pw2wannier': {
-                    'code': code_pw2wannier90,
-                    'metadata': get_metadata_singlecore()
+                    'bands_batchsize': orm.Int(pw2wannier_bands_batchsize),
+                    'pw2wannier': {
+                        'code': code_pw2wannier90,
+                        'metadata': get_metadata_singlecore()
+                    },
                 }
             }
         }
@@ -256,59 +279,61 @@ def get_qe_specific_fp_run_inputs(
     return inner
 
 
-@pytest.fixture
-def get_vasp_specific_fp_run_inputs(code_vasp):
-    """
-    Creates the InSb inputs for the VASP fp_run workflow.
-    """
-    def inner():
-        return {
-            'potentials': {
-                'In': PotcarData.find_one(family='pbe', symbol='In_d'),
-                'Sb': PotcarData.find_one(family='pbe', symbol='Sb')
-            },
-            'parameters':
-            orm.Dict(
-                dict=dict(
-                    ediff=1e-3,
-                    lsorbit=True,
-                    isym=0,
-                    ismear=0,
-                    sigma=0.05,
-                    gga='PE',
-                    encut=380,
-                    magmom='600*0.0',
-                    nbands=36,
-                    kpar=4,
-                    nelmin=0,
-                    lwave=False,
-                    aexx=0.25,
-                    lhfcalc=True,
-                    hfscreen=0.23,
-                    algo='N',
-                    time=0.4,
-                    precfock='normal',
-                )
-            ),
-            'code':
-            code_vasp,
-            'calculation_kwargs':
-            dict(
-                options=dict(
-                    resources={
-                        'num_machines': 2,
-                        'num_mpiprocs_per_machine': 18
-                    },
-                    withmpi=True,
-                    max_wallclock_seconds=1200
-                )
-            ),
-            'scf': {
-                'parameters': orm.Dict(dict=dict(isym=2))
-            }
-        }
+# @pytest.fixture
+# def get_vasp_specific_fp_run_inputs(code_vasp):
+#     """
+#     Creates the InSb inputs for the VASP fp_run workflow.
+#     """
+#     from aiida_vasp.data.potcar import PotcarData
 
-    return inner
+#     def inner():
+#         return {
+#             'potentials': {
+#                 'In': PotcarData.find_one(family='pbe', symbol='In_d'),
+#                 'Sb': PotcarData.find_one(family='pbe', symbol='Sb')
+#             },
+#             'parameters':
+#             orm.Dict(
+#                 dict=dict(
+#                     ediff=1e-3,
+#                     lsorbit=True,
+#                     isym=0,
+#                     ismear=0,
+#                     sigma=0.05,
+#                     gga='PE',
+#                     encut=380,
+#                     magmom='600*0.0',
+#                     nbands=36,
+#                     kpar=4,
+#                     nelmin=0,
+#                     lwave=False,
+#                     aexx=0.25,
+#                     lhfcalc=True,
+#                     hfscreen=0.23,
+#                     algo='N',
+#                     time=0.4,
+#                     precfock='normal',
+#                 )
+#             ),
+#             'code':
+#             code_vasp,
+#             'calculation_kwargs':
+#             dict(
+#                 options=dict(
+#                     resources={
+#                         'num_machines': 2,
+#                         'num_mpiprocs_per_machine': 18
+#                     },
+#                     withmpi=True,
+#                     max_wallclock_seconds=1200
+#                 )
+#             ),
+#             'scf': {
+#                 'parameters': orm.Dict(dict=dict(isym=2))
+#             }
+#         }
+
+#     return inner
 
 
 @pytest.fixture
@@ -319,10 +344,13 @@ def get_fp_run_inputs(
     """
     Create input for the QE InSb sample.
     """
-    def inner():
+    def inner(pw2wannier_bands_batchsize=_DEFAULT_PW2WANNIER_BANDS_BATCHSIZE):
 
         return dict(
-            **get_top_level_insb_inputs(), **get_qe_specific_fp_run_inputs()
+            **get_top_level_insb_inputs(),
+            **get_qe_specific_fp_run_inputs(
+                pw2wannier_bands_batchsize=pw2wannier_bands_batchsize
+            )
         )
 
     return inner
@@ -353,6 +381,8 @@ def get_fp_tb_inputs(
     Returns the input for DFT-based tight-binding workflows (without optimization).
     """
     def inner():
+        from aiida_tbextraction.fp_run import QuantumEspressoFirstPrinciplesRun  # pylint: disable=import-outside-toplevel
+
         inputs = get_top_level_insb_inputs()
 
         inputs['fp_run_workflow'] = QuantumEspressoFirstPrinciplesRun
